@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Air Quality Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+ <script>
+  // Initialize the map
+  var map = L.map('map').setView([28.6139, 77.2090], 11);
+
+  // Add OpenStreetMap layer
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  // Define AQI color ranges
+  function getColor(aqi) {
+      return aqi > 300 ? '#7e0023' :
+             aqi > 200 ? '#660099' :
+             aqi > 150 ? '#cc0033' :
+             aqi > 100 ? '#ff9933' :
+             aqi > 50  ? '#ffde33' :
+                         '#009966';
+  }
+
+  // Fetch data from FastAPI backend
+  fetch('http://127.0.0.1:8000/stations')
+    .then(response => response.json())
+    .then(data => {
+        data.forEach(station => {
+            const marker = L.circleMarker([station.lat, station.lon], {
+                radius: 10,
+                color: getColor(station.aqi),
+                fillColor: getColor(station.aqi),
+                fillOpacity: 0.8
+            }).addTo(map);
+
+            marker.bindPopup(`
+                <b>${station.name}</b><br>
+                AQI: ${station.aqi}
+            `);
+        });
+    })
+    .catch(err => console.error('Error fetching stations:', err));
+</script>
+
+</body>
+</html>

@@ -1,0 +1,21 @@
+version: "3.9"
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: airq_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=airuser
+      - POSTGRES_PASSWORD=airpass
+      - POSTGRES_DB=airquality
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db_data:/var/lib/postgresql/data
+services:
+  retrainer:
+    image: python:3.11-slim
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: sh -c "while true; do python retrain_model.py || true; sleep 86400; done"
