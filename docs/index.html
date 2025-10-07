@@ -1,290 +1,246 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Air Quality — Dashboard</title>
+  <title>AirProj — Dashboard</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <style>
-    html,body,#map { height:100%; margin:0; padding:0; }
-    #sidebar { position:absolute; right:0; top:0; width:420px; height:100%; overflow:auto; background:#fff; padding:16px; box-shadow:-4px 0 12px rgba(0,0,0,0.15); z-index:400; }
-    #map { position: absolute; left:0; top:0; right:420px; bottom:0; }
-    button{display:inline-block;margin:6px 0;padding:8px 10px;cursor:pointer;}
-    input[type=text]{width:100%;padding:8px;margin-top:6px;margin-bottom:10px;}
-    .small{font-size:12px;color:#666}
-    .note{font-size:13px;color:#333;margin-top:8px}
+    :root{
+      --accent:#0b76ef;
+      --bg:#ffffff;
+      --muted:#666;
+      --panel-bg: #ffffff;
+      --card-shadow: 0 6px 18px rgba(12,20,30,0.08);
+    }
+    html,body,#map { height:100%; margin:0; padding:0; font-family: Inter, system-ui, Arial; background:#f4f6f8; }
+    #sidebar { position:absolute; right:0; top:0; width:380px; height:100%; overflow:auto; background:var(--panel-bg); padding:18px; box-shadow:-6px 0 24px rgba(9,14,20,0.06); z-index:400; }
+    #map { position: absolute; left:0; top:0; right:380px; bottom:0; }
+    .btn { background:var(--accent); color:white; border:none; padding:8px 10px; border-radius:8px; cursor:pointer; }
+    input[type=text], select { width:100%; padding:8px; margin-top:6px; margin-bottom:8px; border-radius:6px; border:1px solid #e4e7eb; }
+    h3 { margin:0 0 8px 0; font-weight:600; }
+    .small { font-size:12px; color:var(--muted); }
+    .card { background: #fff; padding:12px; border-radius:10px; box-shadow: var(--card-shadow); margin-bottom:12px; }
+    .row { display:flex; gap:8px; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-
   <div id="sidebar">
-    <h3>Air Quality — Dashboard</h3>
-
-    <div>
-      <strong>Backend URL</strong>
-      <div class="small">Change this to your deployed Render/hosted API URL</div>
-      <input id="apiUrl" type="text" value="https://airproj.onrender.com" />
-      <button id="btnSetApi">Use this API</button>
+    <h3>AirProj — Dashboard</h3>
+    <div class="small">Backend</div>
+    <input id="apiUrl" placeholder="API base URL (no trailing slash)" value="http://127.0.0.1:8010" />
+    <div style="margin:8px 0 12px;">
+      <button id="btnSetApi" class="btn">Set API</button>
     </div>
 
-    <hr/>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong>Quick Search (natural language)</strong>
+      </div>
+      <div class="small">Type a place like "Connaught Place, Delhi" or "Noida Sector 62"</div>
+      <input id="loc-input" type="text" placeholder="e.g., Connaught Place, Delhi" />
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button id="predict-btn" class="btn">Predict AQI</button>
+        <button id="loc-clear" style="background:#eee;border:none;padding:8px;border-radius:8px;cursor:pointer;">Clear</button>
+      </div>
+      <div id="nlResult" class="small" style="margin-top:8px;"></div>
+    </div>
 
-    <div>
+    <div class="card">
       <strong>Stations</strong>
-      <div class="small">Latest station points (click marker for details)</div>
-      <div id="stationsList" style="margin-top:8px;">No stations found.</div>
-      <button id="btnRefreshStations">Refresh stations</button>
+      <div class="small">Click refresh to load station points</div>
+      <div style="margin-top:8px;"><button id="btnRefreshStations" class="btn">Refresh Stations</button></div>
+      <div id="stationsList" style="margin-top:10px;" class="small">No stations loaded.</div>
     </div>
 
-    <hr/>
-
-    <div>
-      <strong>Interpolate grid (IDW)</strong>
-      <div class="small">Compute spatial grid from latest station PM2.5</div>
-      <button id="btnInterp">Compute / Refresh grid</button>
-      <div id="interpStatus" class="small" style="margin-top:6px"></div>
+    <div class="card">
+      <strong>Interpolation (IDW)</strong>
+      <div class="small">Compute spatial grid from station PM2.5</div>
+      <div style="margin-top:8px;">
+        <button id="btnInterp" class="btn">Compute / Refresh Grid</button>
+      </div>
+      <div id="interpStatus" class="small" style="margin-top:8px;"></div>
     </div>
 
-    <hr/>
-
-    <div>
+    <div class="card">
       <strong>Safe route demo</strong>
-      <div class="small">Click map for start and end or paste coords below</div>
-      Start (lat,lon) <input id="startCoord" placeholder="28.6139,77.2090"/>
-      End (lat,lon) <input id="endCoord" placeholder="28.7041,77.1025"/>
-      <button id="btnRoute">Compute Safe vs Fast</button>
-      <div id="routeInfo" class="note"></div>
+      <div class="small">Click map once for start, once for end — or paste coords below</div>
+      <input id="startCoord" placeholder="28.6139,77.2090" />
+      <input id="endCoord" placeholder="28.7041,77.1025" />
+      <div style="margin-top:8px;">
+        <button id="btnRoute" class="btn">Compute Safe vs Fast</button>
+      </div>
+      <div id="routeInfo" class="small" style="margin-top:8px;"></div>
     </div>
 
-    <hr/>
-
-    <div>
-      <strong>Predict 1-hour AQI</strong>
-      <div class="small">Send a single record to /predict and get forecast</div>
-      <label>lat</label><input id="p_lat" type="text" value="28.6139"/>
-      <label>lon</label><input id="p_lon" type="text" value="77.2090"/>
-      <label>timestamp (ISO) - leave empty to use now</label><input id="p_ts" type="text" placeholder="2025-10-07T00:00:00Z"/>
-      <label>pm2.5</label><input id="p_pm25" type="text" value="80"/>
-      <label>pm10</label><input id="p_pm10" type="text" value="120"/>
-      <label>temperature (°C)</label><input id="p_temp" type="text" value="28.5"/>
-      <label>relativehumidity (%)</label><input id="p_rh" type="text" value="45"/>
-      <label>wind speed (m/s)</label><input id="p_ws" type="text" value="3.2"/>
-      <label>wind direction (deg)</label><input id="p_wd" type="text" value="210"/>
-      <label>fire_count (optional)</label><input id="p_fire" type="text" value="1"/>
-      <button id="btnPredict">Predict 1-hr AQI</button>
-      <div id="predResult" class="note"></div>
-    </div>
-
-    <hr/>
-    <div class="small">Tip: open the browser console for detailed logs</div>
   </div>
 
+  <!-- external libs -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <script>
-    let map = L.map('map').setView([28.65,77.2], 11);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-
-    // app state
+    // state
     const state = {
-      apiUrl: localStorage.getItem('apiUrl') || document.getElementById('apiUrl').value,
-      markers: [],           // leafet marker objects
-      markersGroup: null,    // L.featureGroup for bounds
+      apiUrl: document.getElementById('apiUrl').value.replace(/\/+$/,''),
+      markers: [],
+      clusterGroup: null,
       gridLayer: null,
-      routesLayer: L.layerGroup().addTo(map)
+      routesLayer: L.layerGroup().addTo(map),
     };
 
-    // sync UI api input
+    // map init
+    let map = L.map('map').setView([28.65,77.2], 11);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© OpenStreetMap, CARTO' }).addTo(map);
+
+    // elements
     const apiInput = document.getElementById('apiUrl');
-    apiInput.value = state.apiUrl;
     document.getElementById('btnSetApi').onclick = () => {
-      state.apiUrl = apiInput.value.trim().replace(/\/+$/, ''); // remove trailing slash
-      localStorage.setItem('apiUrl', state.apiUrl);
-      alert('API set to: ' + state.apiUrl);
+      state.apiUrl = apiInput.value.trim().replace(/\/+$/,'');
+      localStorage.setItem('airproj_api', state.apiUrl);
+      alert('API set: ' + state.apiUrl);
     };
+    // persist
+    const stored = localStorage.getItem('airproj_api');
+    if(stored){ state.apiUrl = stored; apiInput.value = stored; }
 
-    // helper: fetch JSON with error handling
     async function fetchJson(path, opts){
       const url = state.apiUrl + path;
-      console.log('fetching', url);
       try {
-        const res = await fetch(url, opts || {});
+        const res = await fetch(url, opts);
         if(!res.ok){
-          const text = await res.text();
-          throw new Error(res.status + ' ' + res.statusText + ' - ' + text);
+          const txt = await res.text();
+          throw new Error(res.status + ' ' + res.statusText + ' - ' + txt);
         }
         return await res.json();
-      } catch(err){
-        console.error('fetch error', err);
-        throw err;
+      } catch(e) {
+        console.error('fetch error', e);
+        throw e;
       }
     }
 
-    // --- Stations ---
+    // --- stations ---
     async function loadStations(){
       document.getElementById('stationsList').innerText = 'Loading...';
       try {
         const data = await fetchJson('/stations');
-        if(!data || !Array.isArray(data.stations)){
-          throw new Error('unexpected stations payload');
-        }
-        // remove old markers
-        state.markers.forEach(m => map.removeLayer(m));
-        state.markers = [];
-        // create markers
-        data.stations.forEach(s => {
-          const m = L.marker([s.lat, s.lon]).addTo(map);
-          const popup = `<b>Station ${s.station_id || ''}</b><br>pm25: ${s.pm25}<br>lat:${s.lat}, lon:${s.lon}`;
-          m.bindPopup(popup);
-          state.markers.push(m);
+        // if data is list or {stations:[]}
+        const arr = Array.isArray(data) ? data : (data.stations || []);
+        // clear markers
+        if(state.clusterGroup) { map.removeLayer(state.clusterGroup); state.clusterGroup.clearLayers(); }
+        state.clusterGroup = L.markerClusterGroup();
+        arr.forEach(s => {
+          if(!s.lat || !s.lon) return;
+          const marker = L.marker([s.lat, s.lon], {title: `Station ${s.station_id || ''}`});
+          const popupHtml = `<div style="width:200px"><b>Station ${s.station_id || ''}</b><div class="small">PM2.5: ${s.pm25 ?? '—'}</div><canvas id="chart-${s.station_id}" width="200" height="80"></canvas></div>`;
+          marker.bindPopup(popupHtml);
+          marker.on('popupopen', async () => {
+            // request history and draw Chart.js mini chart into popup canvas
+            try {
+              const hist = await fetchJson(`/history/${s.station_id}`);
+              const ctx = document.querySelector(`#chart-${s.station_id}`).getContext('2d');
+              const labels = hist.history.map(d => new Date(d.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}));
+              const dataSer = hist.history.map(d => d.aqi);
+              new Chart(ctx, {type:'line', data:{labels, datasets:[{label:'AQI', data:dataSer, fill:true, tension:0.35, pointRadius:0}]}, options:{plugins:{legend:{display:false}}, scales:{x:{display:false}, y:{display:false}}}});
+            } catch(e) { /* ignore chart errors */ }
+          });
+          state.clusterGroup.addLayer(marker);
         });
-        // use featureGroup to compute bounds
-        if(state.markersGroup) map.removeLayer(state.markersGroup);
-        if(state.markers.length > 0){
-          state.markersGroup = L.featureGroup(state.markers).addTo(map);
-          map.fitBounds(state.markersGroup.getBounds().pad(0.15));
-          document.getElementById('stationsList').innerHTML = `Stations: ${state.markers.length}`;
-        } else {
-          document.getElementById('stationsList').innerText = 'No stations found.';
-        }
+        map.addLayer(state.clusterGroup);
+        document.getElementById('stationsList').innerText = `Stations: ${arr.length}`;
+        if(arr.length) map.fitBounds(state.clusterGroup.getBounds().pad(0.15));
       } catch(e){
-        console.error('stations error', e);
         document.getElementById('stationsList').innerText = 'Failed to load stations: ' + (e.message||e);
-        alert('Failed to load stations: ' + (e.message||e));
       }
     }
     document.getElementById('btnRefreshStations').onclick = loadStations;
 
-    // --- Interpolation (server) ---
+    // --- interpolate ---
     document.getElementById('btnInterp').onclick = async () => {
-      document.getElementById('interpStatus').innerText = 'Running...';
+      document.getElementById('interpStatus').innerText = 'Computing...';
       try {
-        const res = await fetchJson('/interpolate?force=true');
-        document.getElementById('interpStatus').innerText = `interpolate result: ${JSON.stringify(res)}`;
-        // fetch grid too to show heatmap / dots
+        const r = await fetchJson('/interpolate?force=true');
+        document.getElementById('interpStatus').innerText = `Done: ${JSON.stringify(r)}`;
         await loadGrid();
       } catch(e){
         document.getElementById('interpStatus').innerText = 'Interpolate failed: ' + (e.message||e);
       }
     };
 
-    // --- Load grid (points) and render small dots layer ---
     async function loadGrid(){
       try {
-        const data = await fetchJson('/grid'); // expects {points: [...]} or parquet-converted endpoint
-        // handle either {points: [{lat,lon,pm25},...] } or a flat array
-        const points = Array.isArray(data.points) ? data.points : (Array.isArray(data) ? data : (data.grid || []));
-        if(!points || !points.length) {
-          console.warn('no grid points');
-          return;
-        }
+        const data = await fetchJson('/grid');
+        const points = Array.isArray(data) ? data : (data.points || data);
         if(state.gridLayer) map.removeLayer(state.gridLayer);
         const g = L.layerGroup();
         points.forEach(p => {
-          // small colored circle based on pm25
-          const c = p.pm25 > 150 ? '#b30000' : p.pm25 > 100 ? '#e65c00' : p.pm25 > 60 ? '#ffcc00' : '#8fd14f';
-          L.circleMarker([p.lat, p.lon], {radius: 3, fillColor: c, color: c, weight:0.2}).addTo(g);
+          const c = p.pm25 > 150 ? '#b30000' : p.pm25 > 100 ? '#e65c00' : p.pm25 > 60 ? '#ffcc00' : '#59b300';
+          L.circleMarker([p.lat,p.lon], {radius:3, fillColor:c, color:c, weight:0.2}).addTo(g);
         });
         state.gridLayer = g.addTo(map);
-        console.log('Heatmap added, points:', points.length);
-      } catch(e){
-        console.error('grid load failed', e);
-      }
+      } catch(e){ console.warn('grid load failed', e); }
     }
 
-    // --- Safe route demo ---
-    document.getElementById('btnRoute').onclick = async () => {
+    // --- search NL (predict_text) ---
+    document.getElementById('predict-btn').onclick = async () => {
+      const text = document.getElementById('loc-input').value.trim();
+      if(!text) return alert('Type a place');
+      document.getElementById('nlResult').innerText = 'Searching...';
       try {
-        // parse coords either from inputs or previously clicked points
-        const startRaw = document.getElementById('startCoord').value.trim();
-        const endRaw = document.getElementById('endCoord').value.trim();
-        if(!startRaw || !endRaw) { alert('Provide start and end coords'); return; }
-        const [slat, slon] = startRaw.split(',').map(x => parseFloat(x.trim()));
-        const [elat, elon] = endRaw.split(',').map(x => parseFloat(x.trim()));
-        document.getElementById('routeInfo').innerText = 'requesting safe_route...';
-        const res = await fetchJson(`/safe_route?start_lat=${slat}&start_lon=${slon}&end_lat=${elat}&end_lon=${elon}&samples=80`);
-        document.getElementById('routeInfo').innerText = 'safe route response';
-        // draw routes
-        state.routesLayer.clearLayers();
-        const fast = res.fast_route.coords.map(c => [c[0], c[1]]);
-        const safe = res.safe_route.coords.map(c => [c[0], c[1]]);
-        L.polyline(fast, {color:'blue', weight:4, opacity:0.7}).addTo(state.routesLayer);
-        L.polyline(safe, {color:'green', weight:3, opacity:0.7}).addTo(state.routesLayer);
-        map.fitBounds(L.featureGroup([L.polyline(fast), L.polyline(safe)]).getBounds().pad(0.15));
-        console.log('routes drawn, exposures:', res.fast_route.exposure, res.safe_route.exposure);
-      } catch(e){
-        console.error('route failed', e);
-        alert('Route failed: ' + (e.message||e));
-      }
-    };
-
-    // --- Predict ---
-    document.getElementById('btnPredict').onclick = async () => {
-      const payload = {
-        lat: parseFloat(document.getElementById('p_lat').value),
-        lon: parseFloat(document.getElementById('p_lon').value),
-        ts: (document.getElementById('p_ts').value || new Date().toISOString()),
-        pm25: parseFloat(document.getElementById('p_pm25').value),
-        pm10: parseFloat(document.getElementById('p_pm10').value),
-        temperature_2m: parseFloat(document.getElementById('p_temp').value),
-        relativehumidity_2m: parseFloat(document.getElementById('p_rh').value),
-        windspeed_10m: parseFloat(document.getElementById('p_ws').value),
-        winddirection_10m: parseFloat(document.getElementById('p_wd').value),
-        fire_count: parseFloat(document.getElementById('p_fire').value||0),
-        station_code: 101
-      };
-      try {
-        const res = await fetchJson('/predict', {
+        const res = await fetchJson('/predict_text', {
           method:'POST',
           headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({ location_text: text })
         });
-        document.getElementById('predResult').innerText = `Pred: ${res.predicted_aqi} — ${res.category}`;
-        console.log('predict success', res);
+        document.getElementById('nlResult').innerText = `AQI ${res.predicted_aqi} — ${res.category} at ${res.location.address || ''}`;
+        const m = L.marker([res.location.lat,res.location.lon], {title: res.location.address}).addTo(map);
+        const popup = `<b>${res.location.address}</b><div class="small">AQI: ${res.predicted_aqi} (${res.category})</div>`;
+        m.bindPopup(popup).openPopup();
+        map.setView([res.location.lat,res.location.lon], 13);
       } catch(e){
-        document.getElementById('predResult').innerText = 'Predict failed: ' + (e.message||e);
-        console.error('predict error', e);
+        document.getElementById('nlResult').innerText = 'Search failed: ' + (e.message||e);
       }
     };
 
-    // init: attach map click to set start/end coords for route
+    // --- route demo ---
     let clickCount = 0;
-    map.on('click', function(ev){
+    map.on('click', ev => {
       clickCount++;
-      if(clickCount % 2 === 1){
-        const s = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
-        document.getElementById('startCoord').value = s;
-      } else {
-        const e = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
-        document.getElementById('endCoord').value = e;
-      }
+      if(clickCount % 2 === 1) document.getElementById('startCoord').value = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
+      else document.getElementById('endCoord').value = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
     });
 
-    // load saved api and initial data
-    (async function init(){
+    document.getElementById('btnRoute').onclick = async () => {
+      const startRaw = document.getElementById('startCoord').value.trim();
+      const endRaw = document.getElementById('endCoord').value.trim();
+      if(!startRaw || !endRaw) return alert('Paste start and end coords or click map twice');
+      const [slat,slon] = startRaw.split(',').map(x=>parseFloat(x.trim()));
+      const [elat,elon] = endRaw.split(',').map(x=>parseFloat(x.trim()));
+      document.getElementById('routeInfo').innerText = 'Computing...';
       try {
-        // ensure we have an API
-        state.apiUrl = localStorage.getItem('apiUrl') || state.apiUrl;
-        apiInput.value = state.apiUrl;
-        // quick health check
-        try {
-          await fetchJson('/health');
-          console.log('backend reachable at', state.apiUrl);
-        } catch(err){
-          console.warn('backend health failed', err);
-        }
-        // do initial grid load (if any) and stations
-        await loadGrid();
-        await loadStations();
-      } catch(e){
-        console.error('init failed', e);
-      }
-    })();
-
-    // Debug helper (paste in console)
-    window._fetchFromApi = async (path) => {
-      try { console.log(await fetchJson(path)); } catch(e){ console.error(e); }
+        const res = await fetchJson(`/safe_route?start_lat=${slat}&start_lon=${slon}&end_lat=${elat}&end_lon=${elon}&samples=80`);
+        document.getElementById('routeInfo').innerText = `Safe avg: ${res.safe_route.exposure.avg_pm25?.toFixed(1)}, Fast avg: ${res.fast_route.exposure.avg_pm25?.toFixed(1)}`;
+        // draw
+        if(state.routesLayer) { state.routesLayer.clearLayers(); }
+        const fast = res.fast_route.coords.map(c=>[c[0],c[1]]);
+        const safe = res.safe_route.coords.map(c=>[c[0],c[1]]);
+        L.polyline(fast,{color:'blue',weight:4,opacity:0.6}).addTo(state.routesLayer);
+        L.polyline(safe,{color:'green',weight:3,opacity:0.8}).addTo(state.routesLayer);
+        map.fitBounds(L.featureGroup([L.polyline(fast),L.polyline(safe)]).getBounds().pad(0.15));
+      } catch(e){ document.getElementById('routeInfo').innerText = 'Route failed: ' + (e.message||e); }
     };
+
+    // init
+    (async ()=> {
+      try {
+        await loadStations();
+        await loadGrid();
+      } catch(e){ console.warn('init error', e); }
+    })();
   </script>
 </body>
 </html>

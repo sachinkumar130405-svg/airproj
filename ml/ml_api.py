@@ -11,6 +11,31 @@ from typing import Optional
 # near top of ml_api.py
 import os
 from fastapi import Header
+# add near top of file
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+# Pydantic model
+from pydantic import BaseModel
+class TextPredictRequest(BaseModel):
+    location_text: str
+    ts: Optional[str] = None
+    pm25: Optional[float] = None
+    pm10: Optional[float] = None
+    temperature_2m: Optional[float] = None
+    relativehumidity_2m: Optional[float] = None
+    windspeed_10m: Optional[float] = None
+    winddirection_10m: Optional[float] = None
+    fire_count: float = 0.0
+    mean_frp: float = 0.0
+
+geolocator = Nominatim(user_agent="airproj_demo")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1, max_retries=2)
+
+geolocator = Nominatim(user_agent="airproj_demo")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1, max_retries=2)
+
 
 MODEL_PATH = r"C:\Users\SACHIN KUMAR\Desktop\airproj\ml\aqi_model_final.pkl"
 
@@ -170,138 +195,81 @@ def health_check():
 
 from fastapi import Request
 
-@app.post("/predict")
-async def predict(request: Request):
-    """
-    Flexible predict endpoint:
-    - Accepts minimal payload: {"station_code": 101, "timestamp": "2025-10-07T01:00:00Z"}
-    - Or accepts the full AQIInput fields (lat, lon, ts, pm25, pm10, temperature_2m, ...)
-    - If numeric features are missing, tries to fetch recent values from MERGED_PATH.
-    - Falls back to dataset medians or safe defaults if needed.
-    """
+from pydantic import BaseModel
+
+class TextPredictRequest(BaseModel):
+    location_text: str
+    ts: str = None         # optional, default now if not provided
+    pm25: float = None     # optional if you want to provide a measurement
+    pm10: float = None
+    temperature_2m: float = None
+    relativehumidity_2m: float = None
+    windspeed_10m: float = None
+    winddirection_10m: float = None
+    fire_count: float = 0.0
+    mean_frp: float = 0.0
+
+@app.post("/predict_text")
+def predict_from_text(req: TextPredictRequest):
+    ts = req.ts or datetime.utcnow().isoformat()
+    loc = geocode(req.location_text)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    lat, lon = float(loc.latitude), float(loc.longitude)
+    # Build payload and try to fill missing numeric features from MERGED_PATH
+    payload = {
+        "lat": lat, "lon": lon, "ts": ts,
+        "pm25": req.pm25, "pm10": req.pm10,
+        "temperature_2m": req.temperature_2m,
+        "relativehumidity_2m": req.relativehumidity_2m,
+        "windspeed_10m": req.windspeed_10m,
+        "winddirection_10m": req.winddirection_10m,
+        "fire_count": req.fire_count, "mean_frp": req.mean_frp,
+        "station_code": 0
+    }
+    # best-effort fill from merged parquet
     try:
-        payload = await request.json()
-        # normalize keys
-        station_code = int(payload.get("station_code", payload.get("station", 0) or 0))
-        ts_in = payload.get("ts") or payload.get("timestamp") or payload.get("time") or datetime.utcnow().isoformat() + "Z"
-
-        # defaults
-        defaults = {
-            "lat": None, "lon": None,
-            "pm25": None, "pm10": None,
-            "temperature_2m": None, "relativehumidity_2m": None,
-            "windspeed_10m": None, "winddirection_10m": None,
-            "fire_count": 0.0, "mean_frp": 0.0
-        }
-
-        # first: copy any values provided by client
-        for k in list(defaults.keys()):
-            # accept variants (pm2.5 -> pm25, temperature -> temperature_2m etc.)
-            if k in payload:
-                defaults[k] = payload[k]
-            elif k.replace("_2m", "") in payload:
-                defaults[k] = payload[k.replace("_2m", "")]
-            elif k == "pm25" and payload.get("pm2_5"):
-                defaults[k] = payload.get("pm2_5")
-            elif k == "pm25" and payload.get("pm2.5"):
-                defaults[k] = payload.get("pm2.5")
-
-        # If some fields are still None, try to fill from merged parquet (latest reading for station_code)
         if MERGED_PATH.exists():
-            try:
-                df = pd.read_parquet(MERGED_PATH)
-                # try to find station rows by station_code or by station lat/lon if provided
-                station_rows = None
-                if "station_code" in df.columns:
-                    station_rows = df[df["station_code"] == station_code]
-                # else try to match lat/lon from payload
-                if (station_rows is None or station_rows.empty) and payload.get("lat") and payload.get("lon"):
-                    station_rows = df[(df["lat"] == float(payload["lat"])) & (df["lon"] == float(payload["lon"]))]
-                # fallback to entire df
-                if station_rows is None or station_rows.empty:
-                    station_rows = df
+            df = pd.read_parquet(MERGED_PATH)
+            df = df.dropna(subset=["lat","lon"])
+            coord_arr = np.vstack([df["lat"].to_numpy(), df["lon"].to_numpy()]).T
+            d2 = np.sum((coord_arr - np.array([lat,lon]))**2, axis=1)
+            idx = int(np.argmin(d2))
+            row = df.iloc[idx]
+            # map param/value if needed
+            if payload["pm25"] is None:
+                if "parameter" in row.index and row["parameter"] == "pm25" and "value" in row.index:
+                    payload["pm25"] = float(row["value"])
+                elif "pm25" in row.index:
+                    payload["pm25"] = float(row["pm25"])
+            for f in ["pm10","temperature_2m","relativehumidity_2m","windspeed_10m","winddirection_10m","fire_count","mean_frp"]:
+                if payload.get(f) is None and f in row.index:
+                    payload[f] = float(row[f])
+    except Exception as e:
+        print("predict_text fill warning:", e)
 
-                # find latest pm25/pm10 available
-                if "parameter" in station_rows.columns and "value" in station_rows.columns:
-                    # prefer pm25 parameter
-                    try:
-                        s_pm25 = station_rows[station_rows["parameter"] == "pm25"].sort_values("ts")
-                        if len(s_pm25) > 0 and defaults["pm25"] is None:
-                            defaults["pm25"] = float(s_pm25.iloc[-1]["value"])
-                        s_pm10 = station_rows[station_rows["parameter"] == "pm10"].sort_values("ts")
-                        if len(s_pm10) > 0 and defaults["pm10"] is None:
-                            defaults["pm10"] = float(s_pm10.iloc[-1]["value"])
-                    except Exception:
-                        pass
+    # fallbacks so build_features won't crash
+    for k in ["pm25","pm10","temperature_2m","relativehumidity_2m","windspeed_10m","winddirection_10m"]:
+        if payload.get(k) is None:
+            payload[k] = 0.0
 
-                # if numeric columns exist directly
-                for col in ["pm25", "pm10", "temperature_2m", "relativehumidity_2m", "windspeed_10m", "winddirection_10m", "fire_count", "mean_frp", "lat", "lon"]:
-                    if defaults.get(col) is None and col in station_rows.columns:
-                        try:
-                            val = station_rows.sort_values("ts").iloc[-1].get(col)
-                            if pd.notna(val):
-                                defaults[col] = float(val)
-                        except Exception:
-                            pass
-            except Exception as pe:
-                print("Warning: couldn't read merged dataset to fill defaults:", pe)
-
-        # If still missing, fill with medians from merged dataset or reasonable numeric defaults
-        safe_numeric_defaults = {
-            "pm25": 30.0, "pm10": 50.0,
-            "temperature_2m": 25.0, "relativehumidity_2m": 50.0,
-            "windspeed_10m": 2.0, "winddirection_10m": 180.0,
-            "lat": 0.0, "lon": 0.0
-        }
-        if MERGED_PATH.exists():
-            try:
-                df_all = pd.read_parquet(MERGED_PATH)
-                for k in ["pm25", "pm10", "temperature_2m", "relativehumidity_2m", "windspeed_10m", "winddirection_10m", "lat", "lon"]:
-                    if defaults.get(k) is None:
-                        if k in df_all.columns:
-                            med = pd.to_numeric(df_all[k], errors="coerce").median()
-                            if pd.notna(med):
-                                defaults[k] = float(med)
-            except Exception:
-                pass
-
-        # final fallback
-        for k, v in safe_numeric_defaults.items():
-            if defaults.get(k) is None:
-                defaults[k] = v
-
-        # Build record for feature builder
-        record = {
-            "lat": float(defaults["lat"]),
-            "lon": float(defaults["lon"]),
-            "ts": ts_in,
-            "pm25": float(defaults["pm25"]),
-            "pm10": float(defaults["pm10"]),
-            "temperature_2m": float(defaults["temperature_2m"]),
-            "relativehumidity_2m": float(defaults["relativehumidity_2m"]),
-            "windspeed_10m": float(defaults["windspeed_10m"]),
-            "winddirection_10m": float(defaults["winddirection_10m"]),
-            "fire_count": float(defaults.get("fire_count", 0.0)),
-            "mean_frp": float(defaults.get("mean_frp", 0.0)),
-            "station_code": int(station_code)
-        }
-
-        # Build features & predict
-        features = build_features(record)
-        preds = model.predict(features)
-        predicted = round(float(preds[0]), 2)
-
-        ts_next = pd.to_datetime(ts_in, utc=True) + timedelta(hours=1)
+    # build features and predict
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    try:
+        features = build_features(payload)
+        pred = model.predict(features)[0]
+        pred = round(float(pred), 2)
+        ts_next = pd.to_datetime(payload["ts"], utc=True) + timedelta(hours=1)
         return {
-            "predicted_aqi": predicted,
-            "category": interpret_aqi(predicted),
+            "predicted_aqi": pred,
+            "category": interpret_aqi(pred),
             "timestamp_predicted_for": ts_next.isoformat(),
-            "station_code": int(station_code),
-            "model_path": str(MODEL_PATH)
+            "location": {"lat": lat, "lon": lon, "address": loc.address}
         }
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 from fastapi import HTTPException
 
