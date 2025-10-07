@@ -6,285 +6,259 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <style>
-    html,body,#map { height:100%; margin:0; padding:0; }
-    #sidebar { position:absolute; right:0; top:0; width:420px; height:100%; overflow:auto; background:#fff; padding:16px; box-shadow:-4px 0 12px rgba(0,0,0,0.15); z-index:400; }
+    html,body,#map { height:100%; margin:0; padding:0; font-family: Inter, Arial, sans-serif; }
+    #sidebar { position:absolute; right:0; top:0; width:420px; height:100%; overflow:auto; background:#fff; padding:16px; box-shadow:-4px 0 12px rgba(0,0,0,0.12); z-index:400; }
     #map { position: absolute; left:0; top:0; right:420px; bottom:0; }
-    button{display:inline-block;margin:6px 0;padding:8px 10px;cursor:pointer;}
-    input[type=text]{width:100%;padding:8px;margin-top:6px;margin-bottom:10px;}
+    button{display:inline-block;margin:6px 0;padding:8px 10px;cursor:pointer;border-radius:6px;border:1px solid #ddd;background:#f5f5f5}
+    input[type=text], input[type=number]{width:100%;padding:8px;margin-top:6px;margin-bottom:10px;border:1px solid #ddd;border-radius:6px}
     .small{font-size:12px;color:#666}
     .note{font-size:13px;color:#333;margin-top:8px}
   </style>
 </head>
 <body>
-  <div id="map"></div>
+<div id="search-bar" style="position:absolute; top:10px; left:10px; z-index:1000;">
+  <input id="loc-input" type="text" placeholder="Type address or place (e.g., Connaught Place)" style="width:320px; padding:8px;" />
+  <button id="predict-btn">Predict AQI</button>
+</div>
 
-  <div id="sidebar">
-    <h3>Air Quality — Dashboard</h3>
+<div id="map"></div>
 
-    <div>
-      <strong>Backend URL</strong>
-      <div class="small">Change this to your deployed Render/hosted API URL</div>
-      <input id="apiUrl" type="text" value="https://airproj.onrender.com" />
-      <button id="btnSetApi">Use this API</button>
-    </div>
+<div id="sidebar">
+  <h3>Air Quality — Dashboard</h3>
 
-    <hr/>
-
-    <div>
-      <strong>Stations</strong>
-      <div class="small">Latest station points (click marker for details)</div>
-      <div id="stationsList" style="margin-top:8px;">No stations found.</div>
-      <button id="btnRefreshStations">Refresh stations</button>
-    </div>
-
-    <hr/>
-
-    <div>
-      <strong>Interpolate grid (IDW)</strong>
-      <div class="small">Compute spatial grid from latest station PM2.5</div>
-      <button id="btnInterp">Compute / Refresh grid</button>
-      <div id="interpStatus" class="small" style="margin-top:6px"></div>
-    </div>
-
-    <hr/>
-
-    <div>
-      <strong>Safe route demo</strong>
-      <div class="small">Click map for start and end or paste coords below</div>
-      Start (lat,lon) <input id="startCoord" placeholder="28.6139,77.2090"/>
-      End (lat,lon) <input id="endCoord" placeholder="28.7041,77.1025"/>
-      <button id="btnRoute">Compute Safe vs Fast</button>
-      <div id="routeInfo" class="note"></div>
-    </div>
-
-    <hr/>
-
-    <div>
-      <strong>Predict 1-hour AQI</strong>
-      <div class="small">Send a single record to /predict and get forecast</div>
-      <label>lat</label><input id="p_lat" type="text" value="28.6139"/>
-      <label>lon</label><input id="p_lon" type="text" value="77.2090"/>
-      <label>timestamp (ISO) - leave empty to use now</label><input id="p_ts" type="text" placeholder="2025-10-07T00:00:00Z"/>
-      <label>pm2.5</label><input id="p_pm25" type="text" value="80"/>
-      <label>pm10</label><input id="p_pm10" type="text" value="120"/>
-      <label>temperature (°C)</label><input id="p_temp" type="text" value="28.5"/>
-      <label>relativehumidity (%)</label><input id="p_rh" type="text" value="45"/>
-      <label>wind speed (m/s)</label><input id="p_ws" type="text" value="3.2"/>
-      <label>wind direction (deg)</label><input id="p_wd" type="text" value="210"/>
-      <label>fire_count (optional)</label><input id="p_fire" type="text" value="1"/>
-      <button id="btnPredict">Predict 1-hr AQI</button>
-      <div id="predResult" class="note"></div>
-    </div>
-
-    <hr/>
-    <div class="small">Tip: open the browser console for detailed logs</div>
+  <div>
+    <strong>Backend URL</strong>
+    <div class="small">Change to your deployed API (keep trailing slash removed)</div>
+    <input id="apiUrl" type="text" value="http://127.0.0.1:8010" />
+    <button id="btnSetApi">Use this API</button>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    let map = L.map('map').setView([28.65,77.2], 11);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  <hr/>
 
-    // app state
-    const state = {
-      apiUrl: localStorage.getItem('apiUrl') || document.getElementById('apiUrl').value,
-      markers: [],           // leafet marker objects
-      markersGroup: null,    // L.featureGroup for bounds
-      gridLayer: null,
-      routesLayer: L.layerGroup().addTo(map)
-    };
+  <div>
+    <strong>Stations</strong>
+    <div class="small">Latest station points (click marker for details)</div>
+    <div id="stationsList" style="margin-top:8px;">No stations found.</div>
+    <button id="btnRefreshStations">Refresh stations</button>
+  </div>
 
-    // sync UI api input
-    const apiInput = document.getElementById('apiUrl');
-    apiInput.value = state.apiUrl;
-    document.getElementById('btnSetApi').onclick = () => {
-      state.apiUrl = apiInput.value.trim().replace(/\/+$/, ''); // remove trailing slash
-      localStorage.setItem('apiUrl', state.apiUrl);
-      alert('API set to: ' + state.apiUrl);
-    };
+  <hr/>
 
-    // helper: fetch JSON with error handling
-    async function fetchJson(path, opts){
-      const url = state.apiUrl + path;
-      console.log('fetching', url);
-      try {
-        const res = await fetch(url, opts || {});
-        if(!res.ok){
-          const text = await res.text();
-          throw new Error(res.status + ' ' + res.statusText + ' - ' + text);
-        }
-        return await res.json();
-      } catch(err){
-        console.error('fetch error', err);
-        throw err;
+  <div>
+    <strong>Interpolate grid (IDW)</strong>
+    <div class="small">Compute spatial grid from latest station PM2.5</div>
+    <button id="btnInterp">Compute / Refresh grid</button>
+    <div id="interpStatus" class="small" style="margin-top:6px"></div>
+  </div>
+
+  <hr/>
+
+  <div>
+    <strong>Safe route demo</strong>
+    <div class="small">Click map for start and end or paste coords below</div>
+    Start (lat,lon) <input id="startCoord" placeholder="28.6139,77.2090"/>
+    End (lat,lon) <input id="endCoord" placeholder="28.7041,77.1025"/>
+    <button id="btnRoute">Compute Safe vs Fast</button>
+    <div id="routeInfo" class="note"></div>
+  </div>
+
+  <hr/>
+
+  <div>
+    <strong>Predict 1-hour AQI</strong>
+    <div class="small">Send a single record to /predict</div>
+    <label>lat</label><input id="p_lat" type="text" value="28.6139"/>
+    <label>lon</label><input id="p_lon" type="text" value="77.2090"/>
+    <label>timestamp (ISO) - leave empty to use now</label><input id="p_ts" type="text" placeholder="2025-10-07T00:00:00Z"/>
+    <label>pm2.5</label><input id="p_pm25" type="number" value="80"/>
+    <label>pm10</label><input id="p_pm10" type="number" value="120"/>
+    <label>temperature (°C)</label><input id="p_temp" type="number" value="28.5"/>
+    <label>relativehumidity (%)</label><input id="p_rh" type="number" value="45"/>
+    <label>wind speed (m/s)</label><input id="p_ws" type="number" value="3.2"/>
+    <label>wind direction (deg)</label><input id="p_wd" type="number" value="210"/>
+    <label>fire_count (optional)</label><input id="p_fire" type="number" value="1"/>
+    <button id="btnPredict">Predict 1-hr AQI</button>
+    <div id="predResult" class="note"></div>
+  </div>
+
+  <hr/>
+  <div class="small">Tip: open the browser console for logs</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  let map = L.map('map').setView([28.65,77.2], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+
+  const state = {
+    apiUrl: localStorage.getItem('apiUrl') || document.getElementById('apiUrl').value,
+    markers: [],
+    gridLayer: null,
+    routesLayer: L.layerGroup().addTo(map)
+  };
+
+  document.getElementById('btnSetApi').onclick = () => {
+    state.apiUrl = document.getElementById('apiUrl').value.trim().replace(/\/+$/, '');
+    localStorage.setItem('apiUrl', state.apiUrl);
+    alert('API set to: ' + state.apiUrl);
+  };
+
+  async function fetchJson(path, opts){
+    const url = state.apiUrl + path;
+    try {
+      const res = await fetch(url, opts || {});
+      if(!res.ok){
+        const txt = await res.text();
+        throw new Error(res.status + ' ' + res.statusText + ' - ' + txt);
       }
+      return await res.json();
+    } catch(err){
+      console.error('fetch error', err);
+      throw err;
     }
+  }
 
-    // --- Stations ---
-    async function loadStations(){
-      document.getElementById('stationsList').innerText = 'Loading...';
-      try {
-        const data = await fetchJson('/stations');
-        if(!data || !Array.isArray(data.stations)){
-          throw new Error('unexpected stations payload');
-        }
-        // remove old markers
-        state.markers.forEach(m => map.removeLayer(m));
-        state.markers = [];
-        // create markers
-        data.stations.forEach(s => {
-          const m = L.marker([s.lat, s.lon]).addTo(map);
-          const popup = `<b>Station ${s.station_id || ''}</b><br>pm25: ${s.pm25}<br>lat:${s.lat}, lon:${s.lon}`;
-          m.bindPopup(popup);
-          state.markers.push(m);
-        });
-        // use featureGroup to compute bounds
-        if(state.markersGroup) map.removeLayer(state.markersGroup);
-        if(state.markers.length > 0){
-          state.markersGroup = L.featureGroup(state.markers).addTo(map);
-          map.fitBounds(state.markersGroup.getBounds().pad(0.15));
-          document.getElementById('stationsList').innerHTML = `Stations: ${state.markers.length}`;
-        } else {
-          document.getElementById('stationsList').innerText = 'No stations found.';
-        }
-      } catch(e){
-        console.error('stations error', e);
-        document.getElementById('stationsList').innerText = 'Failed to load stations: ' + (e.message||e);
-        alert('Failed to load stations: ' + (e.message||e));
+  // Stations
+  async function loadStations(){
+    document.getElementById('stationsList').innerText = 'Loading...';
+    try {
+      const data = await fetchJson('/stations');
+      if(!data || !Array.isArray(data.stations)){
+        throw new Error('unexpected stations payload');
       }
-    }
-    document.getElementById('btnRefreshStations').onclick = loadStations;
-
-    // --- Interpolation (server) ---
-    document.getElementById('btnInterp').onclick = async () => {
-      document.getElementById('interpStatus').innerText = 'Running...';
-      try {
-        const res = await fetchJson('/interpolate?force=true');
-        document.getElementById('interpStatus').innerText = `interpolate result: ${JSON.stringify(res)}`;
-        // fetch grid too to show heatmap / dots
-        await loadGrid();
-      } catch(e){
-        document.getElementById('interpStatus').innerText = 'Interpolate failed: ' + (e.message||e);
-      }
-    };
-
-    // --- Load grid (points) and render small dots layer ---
-    async function loadGrid(){
-      try {
-        const data = await fetchJson('/grid'); // expects {points: [...]} or parquet-converted endpoint
-        // handle either {points: [{lat,lon,pm25},...] } or a flat array
-        const points = Array.isArray(data.points) ? data.points : (Array.isArray(data) ? data : (data.grid || []));
-        if(!points || !points.length) {
-          console.warn('no grid points');
-          return;
-        }
-        if(state.gridLayer) map.removeLayer(state.gridLayer);
-        const g = L.layerGroup();
-        points.forEach(p => {
-          // small colored circle based on pm25
-          const c = p.pm25 > 150 ? '#b30000' : p.pm25 > 100 ? '#e65c00' : p.pm25 > 60 ? '#ffcc00' : '#8fd14f';
-          L.circleMarker([p.lat, p.lon], {radius: 3, fillColor: c, color: c, weight:0.2}).addTo(g);
-        });
-        state.gridLayer = g.addTo(map);
-        console.log('Heatmap added, points:', points.length);
-      } catch(e){
-        console.error('grid load failed', e);
-      }
-    }
-
-    // --- Safe route demo ---
-    document.getElementById('btnRoute').onclick = async () => {
-      try {
-        // parse coords either from inputs or previously clicked points
-        const startRaw = document.getElementById('startCoord').value.trim();
-        const endRaw = document.getElementById('endCoord').value.trim();
-        if(!startRaw || !endRaw) { alert('Provide start and end coords'); return; }
-        const [slat, slon] = startRaw.split(',').map(x => parseFloat(x.trim()));
-        const [elat, elon] = endRaw.split(',').map(x => parseFloat(x.trim()));
-        document.getElementById('routeInfo').innerText = 'requesting safe_route...';
-        const res = await fetchJson(`/safe_route?start_lat=${slat}&start_lon=${slon}&end_lat=${elat}&end_lon=${elon}&samples=80`);
-        document.getElementById('routeInfo').innerText = 'safe route response';
-        // draw routes
-        state.routesLayer.clearLayers();
-        const fast = res.fast_route.coords.map(c => [c[0], c[1]]);
-        const safe = res.safe_route.coords.map(c => [c[0], c[1]]);
-        L.polyline(fast, {color:'blue', weight:4, opacity:0.7}).addTo(state.routesLayer);
-        L.polyline(safe, {color:'green', weight:3, opacity:0.7}).addTo(state.routesLayer);
-        map.fitBounds(L.featureGroup([L.polyline(fast), L.polyline(safe)]).getBounds().pad(0.15));
-        console.log('routes drawn, exposures:', res.fast_route.exposure, res.safe_route.exposure);
-      } catch(e){
-        console.error('route failed', e);
-        alert('Route failed: ' + (e.message||e));
-      }
-    };
-
-    // --- Predict ---
-    document.getElementById('btnPredict').onclick = async () => {
-      const payload = {
-        lat: parseFloat(document.getElementById('p_lat').value),
-        lon: parseFloat(document.getElementById('p_lon').value),
-        ts: (document.getElementById('p_ts').value || new Date().toISOString()),
-        pm25: parseFloat(document.getElementById('p_pm25').value),
-        pm10: parseFloat(document.getElementById('p_pm10').value),
-        temperature_2m: parseFloat(document.getElementById('p_temp').value),
-        relativehumidity_2m: parseFloat(document.getElementById('p_rh').value),
-        windspeed_10m: parseFloat(document.getElementById('p_ws').value),
-        winddirection_10m: parseFloat(document.getElementById('p_wd').value),
-        fire_count: parseFloat(document.getElementById('p_fire').value||0),
-        station_code: 101
-      };
-      try {
-        const res = await fetchJson('/predict', {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify(payload)
-        });
-        document.getElementById('predResult').innerText = `Pred: ${res.predicted_aqi} — ${res.category}`;
-        console.log('predict success', res);
-      } catch(e){
-        document.getElementById('predResult').innerText = 'Predict failed: ' + (e.message||e);
-        console.error('predict error', e);
-      }
-    };
-
-    // init: attach map click to set start/end coords for route
-    let clickCount = 0;
-    map.on('click', function(ev){
-      clickCount++;
-      if(clickCount % 2 === 1){
-        const s = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
-        document.getElementById('startCoord').value = s;
+      state.markers.forEach(m => map.removeLayer(m));
+      state.markers = [];
+      data.stations.forEach(s => {
+        const m = L.marker([s.lat, s.lon]).addTo(map);
+        m.bindPopup(`<b>Station ${s.station_code || ''}</b><br>pm25: ${s.pm25}<br>ts:${s.ts||''}`);
+        state.markers.push(m);
+      });
+      if(state.markers.length>0){
+        const group = L.featureGroup(state.markers).addTo(map);
+        map.fitBounds(group.getBounds().pad(0.15));
+        document.getElementById('stationsList').innerText = `Stations: ${state.markers.length}`;
       } else {
-        const e = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
-        document.getElementById('endCoord').value = e;
+        document.getElementById('stationsList').innerText = 'No stations found.';
       }
-    });
+    } catch(e){
+      console.error(e);
+      document.getElementById('stationsList').innerText = 'Failed to load stations: ' + (e.message||e);
+    }
+  }
+  document.getElementById('btnRefreshStations').onclick = loadStations;
 
-    // load saved api and initial data
-    (async function init(){
-      try {
-        // ensure we have an API
-        state.apiUrl = localStorage.getItem('apiUrl') || state.apiUrl;
-        apiInput.value = state.apiUrl;
-        // quick health check
-        try {
-          await fetchJson('/health');
-          console.log('backend reachable at', state.apiUrl);
-        } catch(err){
-          console.warn('backend health failed', err);
-        }
-        // do initial grid load (if any) and stations
-        await loadGrid();
-        await loadStations();
-      } catch(e){
-        console.error('init failed', e);
-      }
-    })();
+  // Interpolate
+  document.getElementById('btnInterp').onclick = async () => {
+    document.getElementById('interpStatus').innerText = 'Running...';
+    try {
+      const res = await fetchJson('/interpolate?force=true');
+      document.getElementById('interpStatus').innerText = `interpolate result: ${JSON.stringify(res)}`;
+      await loadGrid();
+    } catch(e){
+      document.getElementById('interpStatus').innerText = 'Interpolate failed: ' + (e.message||e);
+    }
+  };
 
-    // Debug helper (paste in console)
-    window._fetchFromApi = async (path) => {
-      try { console.log(await fetchJson(path)); } catch(e){ console.error(e); }
+  async function loadGrid(){
+    try {
+      const data = await fetchJson('/grid');
+      const points = Array.isArray(data) ? data : (Array.isArray(data.points) ? data.points : []);
+      if(!points || !points.length) { console.warn('no grid points'); return; }
+      if(state.gridLayer) map.removeLayer(state.gridLayer);
+      const g = L.layerGroup();
+      points.forEach(p => {
+        const c = p.pm25 > 150 ? '#b30000' : p.pm25 > 100 ? '#e65c00' : p.pm25 > 60 ? '#ffcc00' : '#8fd14f';
+        L.circleMarker([p.lat, p.lon], {radius:3, fillColor:c, color:c, weight:0.2}).addTo(g);
+      });
+      state.gridLayer = g.addTo(map);
+    } catch(e){
+      console.error('grid load failed', e);
+    }
+  }
+
+  // Safe route
+  document.getElementById('btnRoute').onclick = async () => {
+    try {
+      const startRaw = document.getElementById('startCoord').value.trim();
+      const endRaw = document.getElementById('endCoord').value.trim();
+      if(!startRaw || !endRaw) { alert('Provide start and end coords'); return; }
+      const [slat, slon] = startRaw.split(',').map(x=>parseFloat(x.trim()));
+      const [elat, elon] = endRaw.split(',').map(x=>parseFloat(x.trim()));
+      document.getElementById('routeInfo').innerText = 'requesting safe_route...';
+      const res = await fetchJson(`/safe_route?start_lat=${slat}&start_lon=${slon}&end_lat=${elat}&end_lon=${elon}&samples=80`);
+      document.getElementById('routeInfo').innerText = 'safe route response';
+      state.routesLayer.clearLayers();
+      const fast = res.fast_route.coords.map(c=>[c[0],c[1]]);
+      const safe = res.safe_route.coords.map(c=>[c[0],c[1]]);
+      L.polyline(fast, {color:'blue', weight:4, opacity:0.7}).addTo(state.routesLayer);
+      L.polyline(safe, {color:'green', weight:3, opacity:0.7}).addTo(state.routesLayer);
+      map.fitBounds(L.featureGroup([L.polyline(fast), L.polyline(safe)]).getBounds().pad(0.15));
+    } catch(e){
+      console.error(e);
+      alert('Route failed: ' + (e.message||e));
+    }
+  };
+
+  // Predict single
+  document.getElementById('btnPredict').onclick = async () => {
+    const payload = {
+      lat: parseFloat(document.getElementById('p_lat').value),
+      lon: parseFloat(document.getElementById('p_lon').value),
+      ts: (document.getElementById('p_ts').value || new Date().toISOString()),
+      pm25: parseFloat(document.getElementById('p_pm25').value),
+      pm10: parseFloat(document.getElementById('p_pm10').value),
+      temperature_2m: parseFloat(document.getElementById('p_temp').value),
+      relativehumidity_2m: parseFloat(document.getElementById('p_rh').value),
+      windspeed_10m: parseFloat(document.getElementById('p_ws').value),
+      winddirection_10m: parseFloat(document.getElementById('p_wd').value),
+      fire_count: parseFloat(document.getElementById('p_fire').value||0),
+      station_code: 101
     };
-  </script>
+    try {
+      const res = await fetchJson('/predict', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      document.getElementById('predResult').innerText = `Pred: ${res.predicted_aqi} — ${res.category}`;
+    } catch(e){
+      document.getElementById('predResult').innerText = 'Predict failed: ' + (e.message||e);
+    }
+  };
+
+  // Predict from text
+  document.getElementById('predict-btn').onclick = async () => {
+    const txt = document.getElementById('loc-input').value;
+    if(!txt){ alert('Type a place'); return; }
+    try {
+      const res = await fetchJson('/predict_text', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ location_text: txt }) });
+      if(!res){ alert('No response'); return; }
+      const { location, predicted_aqi, category } = res;
+      const marker = L.marker([location.lat, location.lon]).addTo(map);
+      marker.bindPopup(`<b>${location.address}</b><br>AQI: ${predicted_aqi} (${category})`).openPopup();
+      map.setView([location.lat, location.lon], 13);
+    } catch(e){
+      console.error(e);
+      alert('Predict failed: ' + (e.message || e));
+    }
+  };
+
+  // map click to set start/end
+  let clickCount = 0;
+  map.on('click', function(ev){
+    clickCount++;
+    if(clickCount % 2 === 1){
+      document.getElementById('startCoord').value = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
+    } else {
+      document.getElementById('endCoord').value = `${ev.latlng.lat.toFixed(6)},${ev.latlng.lng.toFixed(6)}`;
+    }
+  });
+
+  (async function init(){
+    try {
+      state.apiUrl = localStorage.getItem('apiUrl') || state.apiUrl;
+      document.getElementById('apiUrl').value = state.apiUrl;
+      try { await fetchJson('/health'); } catch(e){ console.warn('backend health failed', e); }
+      await loadGrid();
+      await loadStations();
+    } catch(e){ console.error('init failed', e); }
+  })();
+</script>
 </body>
 </html>
