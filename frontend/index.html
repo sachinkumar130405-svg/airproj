@@ -1,0 +1,414 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Air Quality — Dashboard (fixed)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <!-- lightweight styles -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    html,body { height:100%; margin:0; padding:0; font-family: Arial, Helvetica, sans-serif; }
+    #map { position:absolute; left:0; top:0; right:360px; bottom:0; }
+    #sidebar { position:absolute; right:0; top:0; width:360px; bottom:0; overflow:auto; background:#fff; padding:16px; box-shadow: -4px 0 12px rgba(0,0,0,0.12); }
+    button { cursor:pointer; }
+    .small { font-size: 12px; color:#666; }
+    .muted { color:#777; font-size:13px; }
+    .input { width:100%; padding:8px; margin-top:6px; margin-bottom:10px; box-sizing:border-box; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="sidebar">
+    <h2>Air Quality — Dashboard</h2>
+
+    <div style="margin-bottom:12px;">
+      <label class="small">Backend URL</label>
+      <input id="apiUrl" class="input" value="http://127.0.0.1:8010" />
+      <button id="btnSetApi">Set API</button>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label class="small">Search location (English)</label>
+      <div style="display:flex; gap:8px;">
+        <input id="locInput" class="input" placeholder="Connaught Place" />
+        <button id="btnPredict" style="padding:8px 12px;">Predict</button>
+      </div>
+      <div id="predictInfo" class="muted"></div>
+    </div>
+
+    <hr/>
+
+    <div style="margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div><strong>Stations</strong><div class="small">Latest station points</div></div>
+        <button id="btnRefreshStations">Refresh</button>
+      </div>
+      <div id="stationsList" class="muted">Stations: ...</div>
+    </div>
+
+    <hr/>
+
+    <div style="margin-bottom:12px;">
+      <strong>Interpolate grid (IDW)</strong>
+      <div class="small">Compute spatial grid from latest PM2.5</div>
+      <button id="btnInterp">Compute / Refresh</button>
+      <div id="interpStatus" class="muted"></div>
+    </div>
+
+    <hr/>
+
+    <div style="margin-bottom:12px;">
+      <strong>Safe route (demo)</strong>
+      <div class="small">Click map for Start then End, or paste coords</div>
+      <input id="startCoord" class="input" placeholder="start lat,lon" />
+      <input id="endCoord" class="input" placeholder="end lat,lon" />
+      <div style="display:flex; gap:8px;">
+        <button id="btnRoute">Compute route</button>
+        <button id="btnClearRoute">Clear</button>
+      </div>
+      <div id="routeInfo" class="muted"></div>
+    </div>
+
+    <hr/>
+
+    <div>
+      <strong>Station AQI (24h)</strong>
+      <canvas id="aqiChart" height="160"></canvas>
+      <div id="chartMsg" class="muted"></div>
+    </div>
+
+    <div class="small" style="margin-top:12px;">Tip: open browser console for logs.</div>
+  </div>
+
+<script>
+/* -----------------------
+   Config & helpers
+   ----------------------- */
+let API = localStorage.getItem('apiUrl') || (document.getElementById('apiUrl').value = 'http://127.0.0.1:8010');
+
+document.getElementById('btnSetApi').onclick = () => {
+  API = document.getElementById('apiUrl').value.trim().replace(/\/+$/, '');
+  localStorage.setItem('apiUrl', API);
+  alert('API set to ' + API);
+  init(); // re-init with new API
+};
+
+
+async function fetchJson(path, opts){
+  const url = (state.apiUrl || '') + path;
+  console.log('fetching', url);
+  const res = await fetch(url, opts || {});
+  if(!res.ok){
+    const text = await res.text();
+    throw new Error(res.status + ' ' + res.statusText + ' - ' + text);
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if(contentType.includes('application/json')) return await res.json();
+  // fallback: try parse as text then JSON
+  const txt = await res.text();
+  try { return JSON.parse(txt); } catch(e){ return txt; }
+}
+
+/* -----------------------
+   Map & layers
+   ----------------------- */
+const map = L.map('map').setView([28.65,77.2], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+let stationsLayer = L.layerGroup().addTo(map);
+let gridLayer = L.layerGroup().addTo(map);
+let routeLayer = L.layerGroup().addTo(map);
+
+/* -----------------------
+   Stations loader
+   ----------------------- */
+async function loadStations(){
+  try {
+    const data = await fetchJson('/stations');
+    // normalize possible payload shapes
+    let stations = [];
+    if(Array.isArray(data)) stations = data;
+    else if(Array.isArray(data.stations)) stations = data.stations;
+    else if(Array.isArray(data.rows)) stations = data.rows;
+    else if(data && data.length) stations = data;
+    else stations = [];
+
+    // remove old markers
+    state.markers.forEach(m => map.removeLayer(m));
+    state.markers = [];
+    stations.forEach((s, i) => {
+      const lat = parseFloat(s.lat), lon = parseFloat(s.lon);
+      if(isNaN(lat) || isNaN(lon)) return;
+      const m = L.marker([lat, lon]).addTo(map);
+      m.station_code = s.station_id || s.station_code || i;
+      m.bindPopup(`<b>Station ${m.station_code}</b><br>pm25: ${s.pm25 || 'n/a'}<br>ts:${s.ts || ''}`);
+      m.on('click', () => {
+        // fetch history and draw chart
+        loadStationHistory(m.station_code);
+      });
+      state.markers.push(m);
+    });
+
+    if(state.markers.length > 0){
+      if(state.markersGroup) map.removeLayer(state.markersGroup);
+      state.markersGroup = L.featureGroup(state.markers).addTo(map);
+      map.fitBounds(state.markersGroup.getBounds().pad(0.15));
+      document.getElementById('stationsList').innerText = `Stations: ${state.markers.length}`;
+    } else {
+      document.getElementById('stationsList').innerText = 'No stations found.';
+    }
+  } catch(e){
+    console.error('stations error', e);
+    document.getElementById('stationsList').innerText = 'Failed to load stations: ' + (e.message||e);
+  }
+}
+/* -----------------------
+   Interpolate & grid
+   ----------------------- */
+async function computeGrid() {
+  document.getElementById('interpStatus').innerText = 'Running...';
+  try {
+    // call server interpolate endpoint (name: /interpolate?force=true)
+    const r = await fetchJson('/interpolate?force=true');
+    console.log('interpolate result', r);
+    document.getElementById('interpStatus').innerText = `interpolate result: ${JSON.stringify(r)}`;
+    await loadGrid();
+  } catch (e) {
+    document.getElementById('interpStatus').innerText = 'Interpolate failed: ' + (e.message || e);
+  }
+}
+
+async function loadGrid() {
+  try {
+    const r = await fetchJson('/grid');
+    // r might be array or { points: [...] }
+    const pts = Array.isArray(r) ? r : (r && (Array.isArray(r.points) ? r.points : (Array.isArray(r.grid) ? r.grid : [])));
+    gridLayer.clearLayers();
+    if (!pts || !pts.length) {
+      console.warn('no grid points', r);
+      document.getElementById('interpStatus').innerText = 'Grid computed with undefined points';
+      return;
+    }
+    pts.forEach(p => {
+      const c = p.pm25 > 150 ? '#800000' : p.pm25 > 100 ? '#ff6600' : p.pm25 > 60 ? '#ffcc00' : '#5cb85c';
+      L.circleMarker([p.lat,p.lon], { radius: 2, fillColor: c, color: c, weight:0.1, fillOpacity:0.9 }).addTo(gridLayer);
+    });
+    document.getElementById('interpStatus').innerText = `Grid loaded, points: ${pts.length}`;
+  } catch (e) {
+    console.error('loadGrid error', e);
+    document.getElementById('interpStatus').innerText = 'Grid load failed';
+  }
+}
+
+/* -----------------------
+   Station click -> chart (history)
+   ----------------------- */
+let chartInstance = null;
+let chartInstance = null;
+async function loadStationChart(stationId) {
+  document.getElementById('chartMsg').innerText = 'Loading history...';
+  try {
+    const r = await fetchJson(`/history/${stationId}`);
+    const hist = Array.isArray(r) ? r : (r && r.history ? r.history : []);
+    if (!hist.length) {
+      document.getElementById('chartMsg').innerText = 'No history available';
+      return;
+    }
+    const labels = hist.map(h => new Date(h.timestamp).toLocaleTimeString());
+    const values = hist.map(h => h.aqi || h.pm25 || null);
+    const ctx = document.getElementById('aqiChart').getContext('2d');
+    if (chartInstance) chartInstance.destroy();
+    chartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: `Station ${stationId}`,
+          data: values,
+          borderColor: '#1976d2',
+          tension: 0.2,
+          fill: false
+        }]
+      },
+      options: {
+        scales: { y: { beginAtZero: false } }
+      }
+    });
+    document.getElementById('chartMsg').innerText = '';
+  } catch (e) {
+    console.error('history load failed', e);
+    document.getElementById('chartMsg').innerText = 'History load failed';
+  }
+}
+
+document.getElementById('btnLoadChart').onclick = () => {
+  const stationId = document.getElementById('stationSelect').value;
+  if (stationId) loadStationChart(stationId);
+};
+
+// Update station selector when stations load
+window.addEventListener('stationsLoaded', (e) => {
+  const select = document.getElementById('stationSelect');
+  e.detail.stations.forEach(s => {
+    const option = document.createElement('option');
+    option.value = s.station_code || s.station_id || s.id;
+    option.textContent = `Station ${option.value}`;
+    select.appendChild(option);
+  });
+});
+
+// Trigger stations load and update selector
+async function loadStations() {
+  try {
+    const data = await fetchJson('/stations');
+    let stations = [];
+    if (Array.isArray(data)) stations = data;
+    else if (Array.isArray(data.stations)) stations = data.stations;
+    else if (Array.isArray(data.rows)) stations = data.rows;
+    else if (data && data.length) stations = data;
+    state.markers = [];
+    stations.forEach((s, i) => {
+      const lat = parseFloat(s.lat), lon = parseFloat(s.lon);
+      if (isNaN(lat) || isNaN(lon)) return;
+      const m = L.marker([lat, lon]).addTo(map);
+      m.station_code = s.station_id || s.station_code || i;
+      m.bindPopup(`<b>Station ${m.station_code}</b><br>pm25: ${s.pm25 || 'n/a'}<br>ts:${s.ts || ''}`);
+      m.on('click', () => {
+        document.getElementById('stationSelect').value = m.station_code;
+        loadStationChart(m.station_code);
+      });
+      state.markers.push(m);
+    });
+    if (state.markers.length > 0) {
+      if (state.markersGroup) map.removeLayer(state.markersGroup);
+      state.markersGroup = L.featureGroup(state.markers).addTo(map);
+      map.fitBounds(state.markersGroup.getBounds().pad(0.15));
+      document.getElementById('stationsList').innerText = `Stations: ${state.markers.length}`;
+      window.dispatchEvent(new CustomEvent('stationsLoaded', { detail: { stations } }));
+    } else {
+      document.getElementById('stationsList').innerText = 'No stations found.';
+    }
+  } catch (e) {
+    console.error('stations error', e);
+    document.getElementById('stationsList').innerText = 'Failed to load stations: ' + (e.message || e);
+  }
+}
+
+/* -----------------------
+   Safe route
+   ----------------------- */
+let clickedStart = null, clickedEnd = null;
+map.on('click', e => {
+  if (!clickedStart) {
+    clickedStart = e.latlng;
+    document.getElementById('startCoord').value = `${clickedStart.lat.toFixed(6)},${clickedStart.lng.toFixed(6)}`;
+    L.marker(clickedStart, {title:'Start'}).addTo(routeLayer);
+  } else if (!clickedEnd) {
+    clickedEnd = e.latlng;
+    document.getElementById('endCoord').value = `${clickedEnd.lat.toFixed(6)},${clickedEnd.lng.toFixed(6)}`;
+    L.marker(clickedEnd, {title:'End'}).addTo(routeLayer);
+  }
+});
+
+async function computeRoute() {
+  const startRaw = document.getElementById('startCoord').value.trim();
+  const endRaw = document.getElementById('endCoord').value.trim();
+  if (!startRaw || !endRaw) { alert('Provide start and end coords'); return; }
+  const [slat, slon] = startRaw.split(',').map(x => parseFloat(x.trim()));
+  const [elat, elon] = endRaw.split(',').map(x => parseFloat(x.trim()));
+  if (![slat,slon,elat,elon].every(v => isFinite(v))) { alert('Invalid coords'); return; }
+
+  document.getElementById('routeInfo').innerText = 'Requesting safe_route...';
+  try {
+    const r = await fetchJson(`/safe_route?start_lat=${slat}&start_lon=${slon}&end_lat=${elat}&end_lon=${elon}&samples=80`);
+    // backend returns fast_route, safe_route
+    if (!r || (!r.fast_route && !r.safe_route && !r.route)) {
+      console.warn('unexpected safe_route response', r);
+      document.getElementById('routeInfo').innerText = 'Route response unexpected';
+      return;
+    }
+    routeLayer.clearLayers();
+
+    // draw fast
+    const fast = r.fast_route ? r.fast_route.coords.map(c=>[c[0],c[1]]) : (r.route || []);
+    const safe = r.safe_route ? r.safe_route.coords.map(c=>[c[0],c[1]]) : [];
+    if (fast.length) L.polyline(fast, {color:'blue', weight:4, opacity:0.7}).addTo(routeLayer);
+    if (safe.length) L.polyline(safe, {color:'green', weight:3, opacity:0.8}).addTo(routeLayer);
+
+    // zoom to both routes (if present)
+    const group = [];
+    if (fast.length) group.push(L.polyline(fast));
+    if (safe.length) group.push(L.polyline(safe));
+    if (group.length) map.fitBounds(L.featureGroup(group).getBounds().pad(0.15));
+
+    // show exposure summary if present
+    const fastExp = r.fast_route?.exposure?.avg_pm25 ?? null;
+    const safeExp = r.safe_route?.exposure?.avg_pm25 ?? null;
+    document.getElementById('routeInfo').innerText = `Fast avg ${fastExp ?? 'n/a'}, Safe avg ${safeExp ?? 'n/a'}`;
+  } catch (e) {
+    console.error('route failed', e);
+    document.getElementById('routeInfo').innerText = 'Route failed: ' + (e.message || e);
+  }
+}
+
+/* -----------------------
+   Predict from free text -> /predict_text
+   ----------------------- */
+document.getElementById('btnPredict').onclick = async () => {
+  const txt = document.getElementById('locInput').value.trim();
+  if (!txt) { alert('Type a place'); return; }
+  document.getElementById('predictInfo').innerText = 'Predicting...';
+  try {
+    const resp = await fetchJson('/predict_text', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ location_text: txt })
+    });
+    console.log('predict_text response', resp);
+    // resp may be { predicted_aqi, category, location: {lat,lon,address} }
+    if (resp && resp.location && resp.predicted_aqi != null) {
+      const p = resp;
+      document.getElementById('predictInfo').innerHTML = `${p.category} — AQI ${p.predicted_aqi} at ${p.location.address || ''}`;
+      // show marker + center
+      const mk = L.marker([p.location.lat, p.location.lon]).addTo(map);
+      mk.bindPopup(`<b>${p.location.address}</b><br>AQI: ${p.predicted_aqi} (${p.category})`).openPopup();
+      map.setView([p.location.lat, p.location.lon], 13);
+    } else {
+      document.getElementById('predictInfo').innerText = 'Unexpected predict response';
+      console.warn('predict_text unexpected', resp);
+    }
+  } catch (e) {
+    console.error('predict_text failed', e);
+    document.getElementById('predictInfo').innerText = 'Prediction failed';
+  }
+};
+
+/* -----------------------
+   wiring buttons
+   ----------------------- */
+document.getElementById('btnRefreshStations').onclick = loadStations;
+document.getElementById('btnInterp').onclick = computeGrid;
+document.getElementById('btnRoute').onclick = computeRoute;
+document.getElementById('btnClearRoute').onclick = () => { routeLayer.clearLayers(); clickedStart = clickedEnd = null; document.getElementById('startCoord').value=''; document.getElementById('endCoord').value=''; document.getElementById('routeInfo').innerText=''; };
+
+/* -----------------------
+  Init
+  ----------------------- */
+async function init() {
+  // ensure base API from storage
+  document.getElementById('apiUrl').value = localStorage.getItem('apiUrl') || 'http://127.0.0.1:8010';
+  try {
+    // initial attempts: load grid & stations (both tolerant to 404)
+    await loadGrid().catch(()=>{console.log('no grid on init');});
+    await loadStations();
+  } catch(e) { console.warn('init issues', e); }
+}
+
+init();
+</script>
+</body>
+</html>

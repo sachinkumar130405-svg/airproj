@@ -1,17 +1,19 @@
-repos:
-- repo: https://github.com/psf/black
-  rev: 24.1.0
-  hooks:
-    - id: black
-- repo: https://github.com/pre-commit/mirrors-isort
-  rev: v5.10.1
-  hooks:
-    - id: isort
-
-  hooks:
-    - id: isort
-- repo: https://github.com/pre-commit/mirrors-flake8
-  rev: 6.1.0
-  hooks:
-    - id: flake8
-      args: [--max-line-length=88]
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ml/requirements-dev.txt || true
+      - name: Run tests
+        run: pytest -q
