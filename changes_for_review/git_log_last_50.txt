@@ -1,0 +1,25 @@
+﻿ed48c8c Frontend build + new interactive dashboard + retrained model
+74485be Merge pull request #3 from sachinkumar130405-svg/feature/new-model-and-ui
+1e17f5f Update README.md
+cd41c62 Create README.md
+c897a0e chore: remove db_data from repo
+f8195c5 chore: ignore DB files
+201d0ea WIP: save local working changes
+57c759b Merge pull request #1 from sachinkumar130405-svg/feature/ui-polish
+cec40ab Merge pull request #2 from sachinkumar130405-svg/feature/fancy-ui
+c859c97 ui: polish dashboard; wire to production API
+966de36 merge local WIP into feature/ui-polish
+0d6af8a Add runtime and dev requirements
+d17396c WIP: snapshot of local work before cleanup
+1a702de WIP: save local changes before pull
+ae4db9a Add runtime and dev requirements
+20cbb0f Create ci.yml
+a299a88 Add runtime and dev requirements
+a8c54cb Create bug_report.md
+0da7b39 Create PULL_REQUEST_TEMPLATE.md
+3c61e6c Create CODE_OF_CONDUCT.md
+5c286f1 Create CONTRIBUTING.md
+53b3c09 Moved frontend to docs for GitHub Pages
+43c341d Added requirements.txt for backend deployment
+0690d54 Initial project commit
+4845236 Initial project commit
