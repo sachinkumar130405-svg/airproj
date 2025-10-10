@@ -1,5 +1,5 @@
-{
-  "devDependencies": {
-    "gh-pages": "^6.3.0"
-  }
+"homepage": "https://sachinkumar130405-svg.github.io/airproj/",
+"scripts": {
+  "predeploy": "npm run build",
+  "deploy": "gh-pages -d build"
 }
